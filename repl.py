@@ -117,28 +117,26 @@ class SearchREPL:
         self.console.print()
     
     def _show_welcome(self):
-        self.console.print()
+        pass
     
     def _handle_command(self, command: str) -> bool:
-        parts = command.split()
-        cmd = parts[0].lower()
+        cmd = command.split()[0].lower()
         
         if cmd in ['/exit', '/quit', '/q']:
             return False
-        elif cmd == '/help':
-            self._cmd_help()
-        elif cmd in ['/index', '/reindex']:
-            force = cmd == '/reindex'
-            self.console.print()
-            self._index(force=force)
-        elif cmd == '/status':
-            self._cmd_status()
-        elif cmd == '/config':
-            self._cmd_config()
-        elif cmd == '/clear':
-            self._cmd_clear()
-        elif cmd == '/files':
-            self._cmd_files()
+        
+        commands = {
+            '/help': self._cmd_help,
+            '/index': lambda: (self.console.print(), self._index(force=False)),
+            '/reindex': lambda: (self.console.print(), self._index(force=True)),
+            '/status': self._cmd_status,
+            '/config': self._cmd_config,
+            '/clear': self._cmd_clear,
+            '/files': self._cmd_files
+        }
+        
+        if cmd in commands:
+            commands[cmd]()
         else:
             self.console.print(f"[dim]unknown command:[/dim] {cmd}")
             self.console.print("[dim]type /help for commands[/dim]\n")
