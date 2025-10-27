@@ -72,3 +72,4 @@ dmypy.json
 
 # ChromaDB
 chroma_db/
+.search_history
