@@ -1,141 +1,145 @@
-import os
-import sys
-import argparse
-from sentence_transformers import SentenceTransformer
-import chromadb
-from chromadb.api import ClientAPI
-
-# --- Configuration ---
-MODEL_NAME = "google/embeddinggemma-300m"
-
-# ChromaDB configuration
-CHROMA_PATH = "chroma_db"
-COLLECTION_NAME = "file_embeddings"
-
-# --- Model Initialization ---
-print("Loading embedding model...")
-model = SentenceTransformer(MODEL_NAME)
-print("Model loaded.")
-
-# --- Helper Functions ---
-
-def get_embedding(text: str) -> list[float]:
-    """Generates an embedding for the given text using the SentenceTransformer model."""
-    try:
-        embedding = model.encode(text, convert_to_tensor=False)
-        return embedding.tolist()
-    except Exception as e:
-        print(f"Error generating embedding: {e}")
-        return []
-
-def is_processed(client: ClientAPI, collection_name: str, file_path: str) -> bool:
-    """Checks if a file has already been processed and stored in ChromaDB."""
-    try:
-        collection = client.get_collection(collection_name)
-        result = collection.get(ids=[file_path])
-        return len(result["ids"]) > 0
-    except Exception:
-        return False
+import click
+from pathlib import Path
+from rich.console import Console
+from rich.progress import track
+from rich.panel import Panel
+from rich.text import Text
+from rich.table import Table
+from text import SemanticSearchEngine
 
 
-# --- Main Logic ---
-def process_directory(directory_path: str, client: ClientAPI):
-    """Processes all text files in a directory, generating and storing embeddings."""
-    collection = client.get_or_create_collection(name=COLLECTION_NAME)
+console = Console()
 
-    for root, _, files in os.walk(directory_path):
-        for file in files:
-            file_path = os.path.join(root, file)
-            if file_path.endswith((".txt", ".md", ".py", ".js", ".html", ".css")): # Add other text file extensions as needed
-                if is_processed(client, COLLECTION_NAME, file_path):
-                    print(f"Skipping already processed file: {file_path}")
-                    continue
 
-                print(f"Processing file: {file_path}")
-                try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        content = f.read()
-                    
-                    if not content.strip():
-                        print(f"Skipping empty file: {file_path}")
-                        continue
+@click.group()
+def cli():
+    """Semantic search tool for local text files."""
+    pass
 
-                    embedding = get_embedding(content)
-                    if embedding:
-                        collection.add(
-                            ids=[file_path],
-                            embeddings=[embedding],
-                            documents=[content]
-                        )
-                except Exception as e:
-                    print(f"Error processing file {file_path}: {e}")
 
-def query_files(query: str, client: ClientAPI, n_results: int = 5):
-    """Queries the ChromaDB for relevant files based on the user's query."""
-    try:
-        collection = client.get_collection(name=COLLECTION_NAME)
-    except Exception:
-        print("No files have been processed yet. Please process a directory first.")
-        return
-
-    query_embedding = get_embedding(query)
-
-    if not query_embedding:
-        print("Could not generate query embedding.")
-        return
-
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=n_results
-    )
-
-    if not results["ids"] or not results["ids"][0]:
-        print("No relevant files found.")
-        return
-
-    print("\n--- Relevant Files ---")
-    ids = results["ids"][0]
-    distances_list = results.get('distances')
-    documents_list = results.get('documents')
+@cli.command()
+@click.option('--input-dir', required=True, type=click.Path(exists=True), help='Directory containing text files')
+@click.option('--extensions', multiple=True, default=['.txt'], help='File extensions to index (can specify multiple)')
+@click.option('--force', is_flag=True, help='Force re-index all files')
+@click.option('--chunk-size', default=800, help='Size of text chunks in characters')
+@click.option('--chunk-overlap', default=100, help='Overlap between chunks in characters')
+def index(input_dir, extensions, force, chunk_size, chunk_overlap):
+    """Index files in the specified directory."""
+    console.print(f"\n[bold cyan]Indexing files from:[/bold cyan] {input_dir}")
+    console.print(f"[dim]Extensions: {', '.join(extensions)}[/dim]")
+    console.print(f"[dim]Chunk size: {chunk_size} chars, Overlap: {chunk_overlap} chars[/dim]\n")
     
-    for i, file_path in enumerate(ids):
-        distance = distances_list[0][i] if distances_list else 0.0
-        document = documents_list[0][i] if documents_list else ""
+    engine = SemanticSearchEngine(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap
+    )
+    
+    with console.status("[bold green]Scanning files..."):
+        stats = engine.index_directory(
+            input_dir=input_dir,
+            file_extensions=list(extensions),
+            force=force
+        )
+    
+    console.print(f"[bold green]✓[/bold green] Indexed {stats['new']} new files")
+    console.print(f"[bold yellow]⟳[/bold yellow] Updated {stats['updated']} changed files")
+    console.print(f"[dim]⊘ Skipped {stats['skipped']} unchanged files[/dim]")
+    console.print(f"\n[bold]Total:[/bold] {stats['total']} files → {stats['chunks']} chunks\n")
+
+
+@cli.command()
+@click.argument('query')
+@click.option('--top', default=5, help='Number of results to show')
+@click.option('--context', default=5, help='Number of context lines around match')
+def search(query, top, context):
+    """Search for semantic matches."""
+    engine = SemanticSearchEngine()
+    
+    console.print(f"\n[bold cyan]🔍 Searching for:[/bold cyan] [yellow]{query}[/yellow]\n")
+    
+    with console.status("[bold green]Searching..."):
+        results = engine.search(query, n_results=top)
+    
+    if not results:
+        console.print("[red]No results found.[/red]\n")
+        return
+    
+    console.print(f"[bold green]Found {len(results)} results:[/bold green]\n")
+    console.print("━" * console.width)
+    
+    for i, result in enumerate(results, 1):
+        file_path = result['file_path']
+        score = result['score']
+        line_start = result['line_start']
+        line_end = result['line_end']
         
-        snippet = document[:200] + "..." if len(document) > 200 else document
-        snippet = snippet.replace('\n', ' ')
+        file_name = Path(file_path).name
         
-        print(f"\n{i+1}. {file_path}")
-        print(f"   Similarity: {1 - distance:.2%}")
-        print(f"   Snippet: {snippet}")
+        context_text, ctx_start, ctx_end = engine.get_context(
+            file_path, line_start, line_end, context
+        )
+        
+        title = f"📄 {file_name} [dim](Score: {score:.2f})[/dim]"
+        subtitle = f"Lines {line_start}-{line_end}"
+        
+        lines = context_text.split('\n')
+        formatted_lines = []
+        
+        for line_num, line in enumerate(lines, start=ctx_start):
+            prefix = f"[dim]{line_num:4d} |[/dim] "
+            
+            # Highlight lines that are in the matched range
+            if line_start <= line_num <= line_end:
+                formatted_lines.append(prefix + f"[bold yellow]{line}[/bold yellow]")
+            else:
+                formatted_lines.append(prefix + f"[dim]{line}[/dim]")
+        
+        content = '\n'.join(formatted_lines)
+        
+        panel = Panel(
+            content,
+            title=title,
+            subtitle=subtitle,
+            border_style="cyan",
+            expand=False
+        )
+        
+        console.print(panel)
+        console.print()
 
 
-def main():
-    """Main function to handle command-line arguments and user interaction."""
-    parser = argparse.ArgumentParser(description="Generate embeddings for files and query them.")
-    parser.add_argument("directory", nargs="?", default=None, help="The directory to process files from.")
-    args = parser.parse_args()
+@cli.command()
+@click.confirmation_option(prompt='Are you sure you want to clear all indexed data?')
+def clear():
+    """Clear all indexed data."""
+    engine = SemanticSearchEngine()
+    
+    with console.status("[bold red]Clearing database..."):
+        engine.clear()
+    
+    console.print("[bold green]✓[/bold green] Database cleared.\n")
 
-    # Initialize ChromaDB client
-    client = chromadb.PersistentClient(path=CHROMA_PATH)
 
-    if args.directory:
-        if not os.path.isdir(args.directory):
-            print(f"Error: Directory not found at '{args.directory}'")
-            sys.exit(1)
-        process_directory(args.directory, client)
-        print("\nFinished processing directory.")
+@cli.command()
+def status():
+    """Show database statistics."""
+    engine = SemanticSearchEngine()
+    
+    with console.status("[bold green]Gathering stats..."):
+        stats = engine.get_stats()
+    
+    table = Table(title="Database Statistics", show_header=True)
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", style="green")
+    
+    table.add_row("Total Files", str(stats['total_files']))
+    table.add_row("Total Chunks", str(stats['total_chunks']))
+    table.add_row("Database Size", f"{stats['total_size_mb']} MB")
+    
+    console.print()
+    console.print(table)
+    console.print()
 
-    # Interactive query loop
-    print("\n--- Ask a question ---")
-    try:
-        while True:
-            query = input("> ")
-            if query.lower() in ["exit", "quit"]:
-                break
-            query_files(query, client)
-    except KeyboardInterrupt:
-        print("\nExiting...")
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    cli()

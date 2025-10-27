@@ -1,12 +1,13 @@
 [project]
 name = "sema-py"
 version = "0.1.0"
-description = "Add your description here"
+description = "Local semantic search tool for text files"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "chromadb",
-    "numpy",
-    "sentence-transformers",
-    "torch",
+    "chromadb>=1.2.2",
+    "sentence-transformers>=5.1.2",
+    "click>=8.3.0",
+    "rich>=14.2.0",
+    "xxhash>=3.6.0",
 ]
