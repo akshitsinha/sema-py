@@ -14,4 +14,5 @@ dependencies = [
     "pillow>=11.0.0",
     "torch>=2.9.0",
     "torchvision>=0.24.0",
+    "gradio>=5.49.1",
 ]
