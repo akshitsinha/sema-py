@@ -226,7 +226,7 @@ class SearchREPL:
         start = time.time()
         
         with self.console.status("[dim]searching...", spinner="dots"):
-            results = self.engine.search(query, n_results=5)
+            results = self.engine.search(query, n_results=5, directory_filter=self.directory)
         
         elapsed = time.time() - start
         
@@ -375,7 +375,7 @@ class SearchREPL:
         start = time.time()
         
         with self.console.status("[dim]searching images...", spinner="dots"):
-            results = self.image_engine.search_by_text(query, n_results=5)
+            results = self.image_engine.search_by_text(query, n_results=5, directory_filter=self.directory)
         
         elapsed = time.time() - start
         
@@ -406,7 +406,7 @@ class SearchREPL:
         start = time.time()
         
         with self.console.status("[dim]finding similar images...", spinner="dots"):
-            results = self.image_engine.search_by_image(image_path, n_results=5)
+            results = self.image_engine.search_by_image(image_path, n_results=5, directory_filter=self.directory)
         
         elapsed = time.time() - start
         

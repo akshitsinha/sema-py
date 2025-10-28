@@ -5,6 +5,7 @@ import xxhash
 import chromadb
 from chromadb.types import Metadata
 from sentence_transformers import SentenceTransformer
+import pymupdf
 
 
 class SemanticSearchEngine:
@@ -122,18 +123,34 @@ class SemanticSearchEngine:
         
         return chunks_with_metadata
     
-    def _index_single_file(self, file_path: str) -> int:
+    def _read_pdf(self, file_path: str) -> Optional[str]:
+        try:
+            doc = pymupdf.open(file_path)
+            text_parts = []
+            for page in doc:
+                text_parts.append(page.get_text())
+            doc.close()
+            return '\n'.join(text_parts)
+        except Exception:
+            return None
+    
+    def _read_file(self, file_path: str) -> Optional[str]:
+        if file_path.lower().endswith('.pdf'):
+            return self._read_pdf(file_path)
+        
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
-                text = f.read()
+                return f.read()
         except UnicodeDecodeError:
             try:
                 with open(file_path, 'r', encoding='latin-1') as f:
-                    text = f.read()
+                    return f.read()
             except Exception:
-                return 0
-        
-        if not text.strip():
+                return None
+    
+    def _index_single_file(self, file_path: str) -> int:
+        text = self._read_file(file_path)
+        if not text or not text.strip():
             return 0
         
         chunks = self._chunk_text(text, file_path)
@@ -177,7 +194,7 @@ class SemanticSearchEngine:
             files.extend(input_path.rglob(f'*{ext}'))
         return [str(f.resolve()) for f in files]
     
-    def index_directory(self, input_dir: str, file_extensions: List[str] = ['.txt'], force: bool = False) -> Dict[str, int]:
+    def index_directory(self, input_dir: str, file_extensions: List[str] = ['.txt', '.pdf'], force: bool = False) -> Dict[str, int]:
         files = self._find_files(input_dir, file_extensions)
         
         new_files = []
@@ -210,16 +227,25 @@ class SemanticSearchEngine:
             'chunks': total_chunks
         }
     
-    def search(self, query: str, n_results: int = 5) -> List[Dict]:
+    def search(self, query: str, n_results: int = 5, directory_filter: Optional[str] = None) -> List[Dict]:
         query_embedding = self.model.encode(query).tolist()
+        
+        # If filtering by directory, fetch more results and filter in Python
+        fetch_count = n_results * 10 if directory_filter else n_results
+        
         results = self.collection.query(
             query_embeddings=[query_embedding],
-            n_results=n_results,
+            n_results=fetch_count,
             include=["documents", "metadatas", "distances"]
         )
         
         if not results['ids'] or not results['ids'][0]:
             return []
+        
+        # Normalize directory path for filtering
+        dir_path_normalized = None
+        if directory_filter:
+            dir_path_normalized = str(Path(directory_filter).resolve())
         
         search_results = []
         for i in range(len(results['ids'][0])):
@@ -230,30 +256,76 @@ class SemanticSearchEngine:
             document = results['documents'][0][i]
             distance = results['distances'][0][i]
             
+            file_path_str = str(metadata['file_path'])
+            
+            # Filter by directory if specified
+            if dir_path_normalized:
+                if not file_path_str.startswith(dir_path_normalized):
+                    continue
+            
             line_start = metadata.get('line_start', 0)
             line_end = metadata.get('line_end', 0)
             
             search_results.append({
-                'file_path': str(metadata['file_path']),
+                'file_path': file_path_str,
                 'line_start': int(line_start) if isinstance(line_start, (int, float)) else 0,
                 'line_end': int(line_end) if isinstance(line_end, (int, float)) else 0,
                 'score': 1 / (1 + distance),
                 'text': document,
                 'distance': distance
             })
+            
+            # Stop once we have enough results
+            if len(search_results) >= n_results:
+                break
         
-        return search_results
+        return search_results[:n_results]
     
     def get_context(self, file_path: str, line_start: int, line_end: int, context_lines: int = 5) -> Tuple[str, int, int]:
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-        except Exception:
+        # Get all chunks for this file from ChromaDB
+        results = self.collection.get(
+            where={"file_path": file_path},
+            include=["documents", "metadatas"]
+        )
+        
+        if not results['ids'] or not results['metadatas'] or not results['documents']:
             return "", line_start, line_end
         
-        start = max(0, line_start - context_lines - 1)
-        end = min(len(lines), line_end + context_lines)
-        return ''.join(lines[start:end]), start + 1, end
+        # Find chunks that overlap with our target range
+        relevant_chunks = []
+        for i, metadata in enumerate(results['metadatas']):
+            if metadata is None:
+                continue
+            chunk_start = metadata.get('line_start', 0)
+            chunk_end = metadata.get('line_end', 0)
+            
+            # Ensure we have integers
+            if not isinstance(chunk_start, int) or not isinstance(chunk_end, int):
+                continue
+            
+            # Check if chunk overlaps with extended range (including context)
+            extended_start = max(1, line_start - context_lines)
+            extended_end = line_end + context_lines
+            
+            if chunk_start <= extended_end and chunk_end >= extended_start:
+                relevant_chunks.append({
+                    'text': results['documents'][i],
+                    'start': chunk_start,
+                    'end': chunk_end
+                })
+        
+        if not relevant_chunks:
+            return "", line_start, line_end
+        
+        # Sort chunks by start line
+        relevant_chunks.sort(key=lambda x: x['start'])
+        
+        # Combine chunks
+        combined_text = '\n'.join(chunk['text'] for chunk in relevant_chunks)
+        actual_start = relevant_chunks[0]['start']
+        actual_end = relevant_chunks[-1]['end']
+        
+        return combined_text, actual_start, actual_end
     
     def clear(self):
         self.client.delete_collection(self.collection.name)

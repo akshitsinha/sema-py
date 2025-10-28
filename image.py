@@ -184,19 +184,27 @@ class ImageSearchEngine:
             'indexed': success_count
         }
     
-    def search_by_text(self, query: str, n_results: int = 5) -> List[Dict]:
+    def search_by_text(self, query: str, n_results: int = 5, directory_filter: Optional[str] = None) -> List[Dict]:
         """Search images using text query."""
         query_lower = query.lower().strip()
         query_embedding = self.model.encode(query).tolist()
         
+        # If filtering by directory, fetch more results and filter in Python
+        fetch_count = min((n_results * 10 if directory_filter else n_results * 3), 100)
+        
         results = self.collection.query(
             query_embeddings=[query_embedding],
-            n_results=min(n_results * 3, 100),
+            n_results=fetch_count,
             include=["metadatas", "distances"]
         )
         
         if not results['ids'] or not results['ids'][0]:
             return []
+        
+        # Normalize directory path for filtering
+        dir_path_normalized = None
+        if directory_filter:
+            dir_path_normalized = str(Path(directory_filter).resolve())
         
         search_results = []
         for i in range(len(results['ids'][0])):
@@ -205,6 +213,14 @@ class ImageSearchEngine:
                 
             metadata = cast(Metadata, results['metadatas'][0][i])
             distance = results['distances'][0][i]
+            
+            file_path_str = str(metadata['file_path'])
+            
+            # Filter by directory if specified
+            if dir_path_normalized:
+                if not file_path_str.startswith(dir_path_normalized):
+                    continue
+            
             extracted_names = str(metadata.get('extracted_names', '')).lower()
             
             base_score = 1 / (1 + distance)
@@ -214,7 +230,7 @@ class ImageSearchEngine:
                 final_score = 0.95 + (base_score * 0.05)
             
             search_results.append({
-                'file_path': str(metadata['file_path']),
+                'file_path': file_path_str,
                 'file_name': str(metadata['file_name']),
                 'score': final_score,
                 'distance': distance,
@@ -224,7 +240,7 @@ class ImageSearchEngine:
         search_results.sort(key=lambda x: x['score'], reverse=True)
         return search_results[:n_results]
     
-    def search_by_image(self, image_path: str, n_results: int = 5) -> List[Dict]:
+    def search_by_image(self, image_path: str, n_results: int = 5, directory_filter: Optional[str] = None) -> List[Dict]:
         """Search similar images using reference image."""
         try:
             with PILImage.open(image_path) as img:
@@ -232,14 +248,22 @@ class ImageSearchEngine:
                     img = img.convert('RGB')
                 query_embedding = self.model.encode([img], show_progress_bar=False)[0].tolist()  # type: ignore
             
+            # If filtering by directory, fetch more results and filter in Python
+            fetch_count = (n_results + 1) * 10 if directory_filter else n_results + 1
+            
             results = self.collection.query(
                 query_embeddings=[query_embedding],
-                n_results=n_results + 1,  # +1 to potentially exclude self
+                n_results=fetch_count,
                 include=["metadatas", "distances"]
             )
             
             if not results['ids'] or not results['ids'][0]:
                 return []
+            
+            # Normalize directory path for filtering
+            dir_path_normalized = None
+            if directory_filter:
+                dir_path_normalized = str(Path(directory_filter).resolve())
             
             search_results = []
             for i in range(len(results['ids'][0])):
@@ -249,22 +273,30 @@ class ImageSearchEngine:
                 metadata = cast(Metadata, results['metadatas'][0][i])
                 distance = results['distances'][0][i]
                 
+                file_path_str = str(metadata['file_path'])
+                
                 # Skip if it's the same image
-                if str(metadata['file_path']) == os.path.abspath(image_path):
+                if file_path_str == os.path.abspath(image_path):
                     continue
                 
+                # Filter by directory if specified
+                if dir_path_normalized:
+                    if not file_path_str.startswith(dir_path_normalized):
+                        continue
+                
                 search_results.append({
-                    'file_path': str(metadata['file_path']),
+                    'file_path': file_path_str,
                     'file_name': str(metadata['file_name']),
                     'score': 1 / (1 + distance),
                     'distance': distance,
                     'extracted_names': str(metadata.get('extracted_names', '')),
                 })
                 
+                # Stop once we have enough results
                 if len(search_results) >= n_results:
                     break
             
-            return search_results
+            return search_results[:n_results]
             
         except Exception as e:
             print(f"Error searching by image: {e}")

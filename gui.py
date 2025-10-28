@@ -59,7 +59,7 @@ class SemanticSearchGUI:
         try:
             progress(0, desc="Finding text files...")
             dir_path = Path(self.directory)
-            files = list(dir_path.rglob("*.txt")) + list(dir_path.rglob("*.md"))
+            files = list(dir_path.rglob("*.txt")) + list(dir_path.rglob("*.md")) + list(dir_path.rglob("*.pdf"))
             
             if not files:
                 return "⚠️ No text files found"
@@ -125,11 +125,11 @@ class SemanticSearchGUI:
                 return "⚠️ No indexed data found. Please go to Management tab and click 'Index Text Files' first."
             
             start_time = time.time()
-            results = self.text_engine.search(query, n_results=int(n_results))
+            results = self.text_engine.search(query, n_results=int(n_results), directory_filter=self.directory)
             elapsed = time.time() - start_time
             
             if not results:
-                return f"🔍 No results found for: **{query}**\n\n(Searched {stats['total_chunks']} chunks in database)"
+                return f"🔍 No results found for: **{query}**\n\n(Searched in current directory)"
             
             output = f"🔍 **Search:** {query} ({elapsed:.2f}s, {len(results)} results)\n\n"
             output += "---\n\n"
@@ -163,11 +163,11 @@ class SemanticSearchGUI:
                 return ([], "⚠️ No indexed images found. Please go to Management tab and click 'Index Images' first.")
             
             start_time = time.time()
-            results = self.image_engine.search_by_text(query, n_results=int(n_results))
+            results = self.image_engine.search_by_text(query, n_results=int(n_results), directory_filter=self.directory)
             elapsed = time.time() - start_time
             
             if not results:
-                return ([], f"🔍 No results found for: **{query}**\n\n(Searched {stats['total_images']} images in database)")
+                return ([], f"🔍 No results found for: **{query}**\n\n(Searched in current directory)")
             
             gallery_images = []
             for result in results:
@@ -195,7 +195,7 @@ class SemanticSearchGUI:
                 return ([], "⚠️ No indexed images found. Please go to Management tab and click 'Index Images' first.")
             
             start_time = time.time()
-            results = self.image_engine.search_by_image(ref_image, n_results=int(n_results))
+            results = self.image_engine.search_by_image(ref_image, n_results=int(n_results), directory_filter=self.directory)
             elapsed = time.time() - start_time
             
             if not results:
