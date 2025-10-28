@@ -11,4 +11,7 @@ dependencies = [
     "rich>=14.2.0",
     "xxhash>=3.6.0",
     "prompt-toolkit>=3.0.48",
+    "pillow>=11.0.0",
+    "torch>=2.9.0",
+    "torchvision>=0.24.0",
 ]
