@@ -12,14 +12,14 @@ class SemanticSearchGUI:
         self.image_engine: Optional[ImageSearchEngine] = None
         self.directory: Optional[str] = None
         
-    def load_directory(self, directory: str) -> Tuple[str, dict, dict, dict, dict]:  # type: ignore
+    def load_directory(self, directory: str) -> Tuple[str, dict]:  # type: ignore
         """Load directory and initialize engines."""
         try:
             dir_path = Path(directory).expanduser().resolve()
             if not dir_path.exists():
-                return ("❌ Error: Directory does not exist", {}, {}, {}, {})
+                return ("❌ Error: Directory does not exist", {})
             if not dir_path.is_dir():
-                return ("❌ Error: Path is not a directory", {}, {}, {}, {})
+                return ("❌ Error: Path is not a directory", {})
             
             self.directory = str(dir_path)
             self.text_engine = SemanticSearchEngine()
@@ -43,13 +43,10 @@ class SemanticSearchGUI:
             
             return (
                 status,
-                gr.update(visible=True),
-                gr.update(visible=True),
-                gr.update(visible=True),
                 gr.update(visible=True)
             )
         except Exception as e:
-            return (f"❌ Error: {str(e)}", {}, {}, {}, {})
+            return (f"❌ Error: {str(e)}", {})
     
     def index_text_files(self, progress=gr.Progress()) -> str:
         """Index text files in directory."""
@@ -394,7 +391,7 @@ def create_gui():
         load_btn.click(
             fn=gui.load_directory,
             inputs=[directory_input],
-            outputs=[status_output, main_tabs, main_tabs, main_tabs, main_tabs]
+            outputs=[status_output, main_tabs]
         )
         
         text_search_btn.click(
