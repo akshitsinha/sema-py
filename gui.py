@@ -445,4 +445,4 @@ def create_gui():
 
 if __name__ == "__main__":
     demo = create_gui()
-    demo.launch(server_name="127.0.0.1", server_port=7860)
+    demo.launch(server_name="127.0.0.1", server_port=7860, allowed_paths=["/Users/asi/Downloads/dataset"])

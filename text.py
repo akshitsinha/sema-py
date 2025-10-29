@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any, cast
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import xxhash
 import chromadb
 from chromadb.types import Metadata
@@ -194,7 +195,7 @@ class SemanticSearchEngine:
             files.extend(input_path.rglob(f'*{ext}'))
         return [str(f.resolve()) for f in files]
     
-    def index_directory(self, input_dir: str, file_extensions: List[str] = ['.txt', '.pdf'], force: bool = False) -> Dict[str, int]:
+    def index_directory(self, input_dir: str, file_extensions: List[str] = ['.txt', '.pdf'], force: bool = False, max_workers: int = 4) -> Dict[str, int]:
         files = self._find_files(input_dir, file_extensions)
         
         new_files = []
@@ -217,7 +218,19 @@ class SemanticSearchEngine:
                 else:
                     skipped_files.append(file_path)
         
-        total_chunks = sum(self._index_single_file(f) for f in new_files + updated_files)
+        files_to_index = new_files + updated_files
+        total_chunks = 0
+        
+        if files_to_index:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_file = {executor.submit(self._index_single_file, f): f for f in files_to_index}
+                for future in as_completed(future_to_file):
+                    try:
+                        chunks = future.result()
+                        total_chunks += chunks
+                    except Exception as e:
+                        file_path = future_to_file[future]
+                        print(f"Error indexing {file_path}: {e}")
         
         return {
             'new': len(new_files),

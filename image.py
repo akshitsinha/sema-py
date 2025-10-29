@@ -2,6 +2,7 @@ import os
 import re
 from pathlib import Path
 from typing import List, Dict, Optional, Any, cast
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import xxhash
 import chromadb
 from chromadb.types import Metadata
@@ -151,7 +152,7 @@ class ImageSearchEngine:
             files.extend(input_path.rglob(f'*{ext}'))
         return [str(f.resolve()) for f in files]
     
-    def index_directory(self, input_dir: str, file_extensions: List[str] = ['.jpg', '.jpeg', '.png'], force: bool = False) -> Dict[str, int]:
+    def index_directory(self, input_dir: str, file_extensions: List[str] = ['.jpg', '.jpeg', '.png'], force: bool = False, max_workers: int = 4) -> Dict[str, int]:
         files = self._find_files(input_dir, file_extensions)
         
         new_files = []
@@ -174,11 +175,23 @@ class ImageSearchEngine:
                 else:
                     skipped_files.append(file_path)
         
-        success_count = sum(1 for f in new_files + updated_files if self._index_single_file(f))
+        files_to_index = new_files + updated_files
+        success_count = 0
+        
+        if files_to_index:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_file = {executor.submit(self._index_single_file, f): f for f in files_to_index}
+                for future in as_completed(future_to_file):
+                    try:
+                        if future.result():
+                            success_count += 1
+                    except Exception as e:
+                        file_path = future_to_file[future]
+                        print(f"Error indexing {file_path}: {e}")
         
         return {
-            'new': len([f for f in new_files if f in (new_files + updated_files)[:success_count]]),
-            'updated': len([f for f in updated_files if f in (new_files + updated_files)[:success_count]]),
+            'new': len([f for f in new_files if f in files_to_index[:success_count]]),
+            'updated': len([f for f in updated_files if f in files_to_index[:success_count]]),
             'skipped': len(skipped_files),
             'total': len(files),
             'indexed': success_count
