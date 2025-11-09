@@ -1,3 +1,5 @@
+#!/usr/bin/env -S uv run
+
 import click
 from repl import SearchREPL
 

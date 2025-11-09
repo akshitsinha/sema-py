@@ -1,3 +1,5 @@
+#!/usr/bin/env -S uv run
+
 import gradio as gr
 from pathlib import Path
 import time
