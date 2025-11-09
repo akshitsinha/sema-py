@@ -7,15 +7,16 @@ import chromadb
 from chromadb.types import Metadata
 from sentence_transformers import SentenceTransformer
 import pymupdf
-from utils import DEVICE
 import time
+
+from utils import DEVICE
 
 
 class SemanticSearchEngine:
     def __init__(
         self,
         db_path: str = "./chroma_db",
-        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+        model_name: str = "sentence-transformers/all-minilm-l6-v2",
         collection_name: str = "text_search",
         chunk_size: int = 800,
         chunk_overlap: int = 100,
@@ -66,7 +67,7 @@ class SemanticSearchEngine:
     def _compute_file_hash(self, file_path: str) -> str:
         hasher = xxhash.xxh3_128()
         with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
+            for chunk in iter(lambda: f.read(65536), b""):
                 hasher.update(chunk)
         return hasher.hexdigest()
 
@@ -171,45 +172,63 @@ class SemanticSearchEngine:
             except Exception:
                 return None
 
-    def _index_single_file(self, file_path: str) -> int:
-        text = self._read_file(file_path)
-        if not text or not text.strip():
-            return 0
+    def _read_file_streaming(self, file_path: str):
+        """Read file in a streaming fashion, yielding lines one at a time."""
+        if file_path.lower().endswith(".pdf"):
+            # Process PDF pages one at a time for memory efficiency
+            try:
+                doc = pymupdf.open(file_path)
+                for page in doc:
+                    page_text = page.get_text()
+                    if isinstance(page_text, str):
+                        # Yield lines from this page
+                        for line in page_text.split("\n"):
+                            if line.strip():  # Skip empty lines
+                                yield line
+                doc.close()
+            except Exception:
+                return
+        else:
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        yield line.rstrip("\n\r")
+            except UnicodeDecodeError:
+                try:
+                    with open(file_path, "r", encoding="latin-1") as f:
+                        for line in f:
+                            yield line.rstrip("\n\r")
+                except Exception:
+                    return
 
-        chunks = self._chunk_text(text, file_path)
-        if not chunks:
+    def _index_single_file(self, file_path: str, batch_size: int = 25) -> int:
+        """Index a single file using streaming processing to minimize memory usage."""
+        line_generator = self._read_file_streaming(file_path)
+        if not line_generator:
             return 0
 
         stat = os.stat(file_path)
         file_hash = self._compute_file_hash(file_path)
-        chunk_texts = [chunk["text"] for chunk in chunks]
-        embeddings = self.model.encode(chunk_texts, show_progress_bar=False)
 
-        ids = [f"{file_path}_chunk_{i}" for i in range(len(chunks))]
-        metadatas: List[Metadata] = [
-            cast(
-                Metadata,
-                {
-                    "file_path": str(file_path),
-                    "file_hash": str(file_hash),
-                    "file_mtime": float(stat.st_mtime),
-                    "file_size": int(stat.st_size),
-                    "chunk_id": int(i),
-                    "line_start": int(chunk["line_start"]),
-                    "line_end": int(chunk["line_end"]),
-                },
-            )
-            for i, chunk in enumerate(chunks)
-        ]
+        total_chunks = 0
+        chunk_batch = []
 
-        self.collection.add(
-            ids=ids,
-            documents=chunk_texts,
-            embeddings=embeddings.tolist(),
-            metadatas=metadatas,
-        )
+        # Process chunks in streaming fashion
+        for chunk_metadata in self._chunk_text_streaming(line_generator, file_path, batch_size):
+            chunk_batch.append(chunk_metadata)
 
-        return len(chunks)
+            # When we have a full batch, process it
+            if len(chunk_batch) >= batch_size:
+                self._process_chunk_batch(chunk_batch, file_path, file_hash, stat, total_chunks)
+                total_chunks += len(chunk_batch)
+                chunk_batch = []  # Clear the batch to free memory
+
+        # Process remaining chunks
+        if chunk_batch:
+            self._process_chunk_batch(chunk_batch, file_path, file_hash, stat, total_chunks)
+            total_chunks += len(chunk_batch)
+
+        return total_chunks
 
     def _find_files(self, input_dir: str, extensions: List[str]) -> List[str]:
         input_path = Path(input_dir)
@@ -284,8 +303,13 @@ class SemanticSearchEngine:
     ) -> List[Dict]:
         query_embedding = self.model.encode(query).tolist()
 
-        # If filtering by directory, fetch more results and filter in Python
-        fetch_count = n_results * 10 if directory_filter else n_results
+        # Optimize fetch count based on whether filtering is needed
+        if directory_filter:
+            # When filtering, we need more results to account for filtering
+            fetch_count = min(n_results * 5, 50)  # Reduced from 10x to 5x, capped at 50
+        else:
+            # When no filtering, we can fetch exactly what we need
+            fetch_count = n_results
 
         results = self.collection.query(
             query_embeddings=[query_embedding],
@@ -339,8 +363,8 @@ class SemanticSearchEngine:
                 }
             )
 
-            # Stop once we have enough results
-            if len(search_results) >= n_results:
+            # Stop early if we have enough results (optimization for non-filtered searches)
+            if not directory_filter and len(search_results) >= n_results:
                 break
 
         return search_results[:n_results]
@@ -424,3 +448,81 @@ class SemanticSearchEngine:
             "total_files": len(unique_files),
             "total_size_mb": round(total_size / (1024 * 1024), 2),
         }
+
+    def _chunk_text_streaming(self, line_generator, file_path: str, batch_size: int = 100):
+        """Generate chunks from a streaming line generator in batches."""
+        current_chunk_lines = []
+        current_line_nums = []
+        current_length = 0
+        line_num = 0
+
+        for line in line_generator:
+            line_num += 1
+            line_length = len(line) + 1  # +1 for newline
+
+            if current_length + line_length > self.chunk_size and current_chunk_lines:
+                # Yield the completed chunk
+                chunk_text = "\n".join(current_chunk_lines)
+                chunk_metadata = {
+                    "text": chunk_text,
+                    "line_start": current_line_nums[0],
+                    "line_end": current_line_nums[-1],
+                }
+
+                yield chunk_metadata
+
+                # Start new chunk with overlap
+                overlap_lines = max(
+                    1,
+                    int(self.chunk_overlap / (current_length / len(current_chunk_lines)))
+                    if current_length > 0 else 1
+                )
+                current_chunk_lines = current_chunk_lines[-overlap_lines:] + [line]
+                current_line_nums = current_line_nums[-overlap_lines:] + [line_num]
+                current_length = sum(len(chunk_line) + 1 for chunk_line in current_chunk_lines)
+            else:
+                current_chunk_lines.append(line)
+                current_line_nums.append(line_num)
+                current_length += line_length
+
+        # Yield the final chunk if it exists
+        if current_chunk_lines:
+            chunk_text = "\n".join(current_chunk_lines)
+            chunk_metadata = {
+                "text": chunk_text,
+                "line_start": current_line_nums[0],
+                "line_end": current_line_nums[-1],
+            }
+            yield chunk_metadata
+
+    def _process_chunk_batch(self, chunk_batch: List[Dict], file_path: str, file_hash: str, stat, start_chunk_id: int):
+        """Process a batch of chunks: generate embeddings and store in database."""
+        if not chunk_batch:
+            return
+
+        chunk_texts = [chunk["text"] for chunk in chunk_batch]
+        embeddings = self.model.encode(chunk_texts, show_progress_bar=False)
+
+        ids = [f"{file_path}_chunk_{start_chunk_id + i}" for i in range(len(chunk_batch))]
+        metadatas: List[Metadata] = [
+            cast(
+                Metadata,
+                {
+                    "file_path": str(file_path),
+                    "file_hash": str(file_hash),
+                    "file_mtime": float(stat.st_mtime),
+                    "file_size": int(stat.st_size),
+                    "chunk_id": int(start_chunk_id + i),
+                    "line_start": int(chunk["line_start"]),
+                    "line_end": int(chunk["line_end"]),
+                },
+            )
+            for i, chunk in enumerate(chunk_batch)
+        ]
+
+        self.collection.add(
+            ids=ids,
+            documents=chunk_texts,
+            embeddings=embeddings.tolist(),
+            metadatas=metadatas,
+        )

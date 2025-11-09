@@ -8,8 +8,9 @@ import chromadb
 from chromadb.types import Metadata
 from sentence_transformers import SentenceTransformer
 from PIL import Image as PILImage
-from utils import DEVICE
 import time
+import gc
+from utils import DEVICE
 
 
 class ImageSearchEngine:
@@ -62,7 +63,7 @@ class ImageSearchEngine:
     def _compute_file_hash(self, file_path: str) -> str:
         hasher = xxhash.xxh3_128()
         with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
+            for chunk in iter(lambda: f.read(65536), b""):
                 hasher.update(chunk)
         return hasher.hexdigest()
 
@@ -116,11 +117,13 @@ class ImageSearchEngine:
         return names
 
     def _index_single_file(self, file_path: str) -> bool:
+        """Index a single image file with memory optimizations."""
         try:
             with PILImage.open(file_path) as img:
                 # Convert to RGB if needed
                 if img.mode != "RGB":
                     img = img.convert("RGB")
+
                 # CLIP model in sentence-transformers can encode images directly
                 embedding = self.model.encode(img, convert_to_numpy=True, show_progress_bar=False)  # pyright: ignore
                 width = img.width
@@ -150,10 +153,13 @@ class ImageSearchEngine:
                 ids=[image_id], embeddings=[embedding.tolist()], metadatas=[metadata]
             )
 
+            # Force garbage collection
+            gc.collect()
+
             return True
 
-        except Exception as e:
-            print(f"Error indexing {file_path}: {e}")
+        except Exception:
+            gc.collect()  # Clean up on error
             return False
 
     def _find_files(self, input_dir: str, extensions: List[str]) -> List[str]:

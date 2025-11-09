@@ -2,6 +2,24 @@
 
 A semantic search engine for local files and images with GPU acceleration and multi-modal retrieval capabilities.
 
+## Demo
+
+### Web Interface
+
+<p align="center">
+  <img src="demo/text query demo.png" alt="Text Query Demo" width="800"/>
+</p>
+
+<p align="center">
+  <img src="demo/semantic search home.png" alt="Semantic Search Home" width="800"/>
+</p>
+
+### Terminal Interface
+
+<p align="center">
+  <img src="demo/tui.gif" alt="Terminal Interface Demo" width="800"/>
+</p>
+
 ## Features
 
 - Search text files and images using natural language queries

@@ -1,3 +1,5 @@
+#!/usr/bin/env -S uv run
+
 import gradio as gr
 from pathlib import Path
 import time
@@ -12,14 +14,14 @@ class SemanticSearchGUI:
         self.image_engine: Optional[ImageSearchEngine] = None
         self.directory: Optional[str] = None
 
-    def load_directory(self, directory: str) -> Tuple[str, dict]:  # type: ignore
+    def load_directory(self, directory: str) -> Tuple[str, gr.Tabs]:
         """Load directory and initialize engines."""
         try:
             dir_path = Path(directory).expanduser().resolve()
             if not dir_path.exists():
-                return ("❌ Error: Directory does not exist", {})
+                return ("❌ Error: Directory does not exist", gr.Tabs(visible=False))
             if not dir_path.is_dir():
-                return ("❌ Error: Path is not a directory", {})
+                return ("❌ Error: Path is not a directory", gr.Tabs(visible=False))
 
             self.directory = str(dir_path)
             self.text_engine = SemanticSearchEngine()
@@ -43,9 +45,9 @@ class SemanticSearchGUI:
             if text_stats["total_chunks"] == 0 or image_stats["total_images"] == 0:
                 status += "⚠️ **Note:** You need to index files before searching. Go to Management tab."
 
-            return (status, gr.update(visible=True))
+            return (status, gr.Tabs(visible=True))
         except Exception as e:
-            return (f"❌ Error: {str(e)}", {})
+            return (f"❌ Error: {str(e)}", gr.Tabs(visible=False))
 
     def index_text_files(self, progress=gr.Progress()) -> str:
         """Index text files in directory."""
@@ -279,14 +281,7 @@ class SemanticSearchGUI:
 def create_gui():
     gui = SemanticSearchGUI()
 
-    with gr.Blocks(
-        title="Semantic Search",
-        css="""
-        .main-container {max-width: 1400px; margin: auto;}
-        .header {text-align: center; padding: 2rem 0;}
-        .status-box {border-left: 4px solid #2563eb; padding: 1rem; margin: 1rem 0;}
-        """,
-    ) as demo:
+    with gr.Blocks(title="Semantic Search") as demo:
         gr.Markdown(
             """
             # 🔍 Semantic Search
@@ -447,4 +442,9 @@ if __name__ == "__main__":
         server_name="127.0.0.1",
         server_port=7860,
         allowed_paths=["/Users/asi/Downloads/dataset"],
+        css="""
+        .main-container {max-width: 1400px; margin: auto;}
+        .header {text-align: center; padding: 2rem 0;}
+        .status-box {border-left: 4px solid #2563eb; padding: 1rem; margin: 1rem 0;}
+        """,
     )
