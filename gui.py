@@ -1,3 +1,5 @@
+#!/usr/bin/env -S uv run
+
 import gradio as gr
 from pathlib import Path
 import time
@@ -279,14 +281,7 @@ class SemanticSearchGUI:
 def create_gui():
     gui = SemanticSearchGUI()
 
-    with gr.Blocks(
-        title="Semantic Search",
-        css="""
-        .main-container {max-width: 1400px; margin: auto;}
-        .header {text-align: center; padding: 2rem 0;}
-        .status-box {border-left: 4px solid #2563eb; padding: 1rem; margin: 1rem 0;}
-        """,
-    ) as demo:
+    with gr.Blocks(title="Semantic Search") as demo:
         gr.Markdown(
             """
             # 🔍 Semantic Search
@@ -447,4 +442,9 @@ if __name__ == "__main__":
         server_name="127.0.0.1",
         server_port=7860,
         allowed_paths=["/Users/asi/Downloads/dataset"],
+        css="""
+        .main-container {max-width: 1400px; margin: auto;}
+        .header {text-align: center; padding: 2rem 0;}
+        .status-box {border-left: 4px solid #2563eb; padding: 1rem; margin: 1rem 0;}
+        """,
     )
